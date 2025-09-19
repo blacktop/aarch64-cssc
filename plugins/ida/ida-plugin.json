@@ -1,0 +1,10 @@
+{
+  "IDAMetadataDescriptorVersion": 1,
+  "plugin": {
+    "name": "AArch64 CSSC",
+    "description": "Disassemble and decompile FEAT_CSSC instructions (currently UMAX/UMIN).",
+    "version": "0.1.0",
+    "minimumIdaVersion": "9.0",
+    "entryPoint": "aarch64_cssc.py"
+  }
+}
