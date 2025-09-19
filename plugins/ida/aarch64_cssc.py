@@ -24,14 +24,14 @@ def _ensure_intrinsic_prototypes() -> None:
         "unsigned __int64 __cssc_umax(unsigned __int64, unsigned __int64);",
         "unsigned __int64 __cssc_umin(unsigned __int64, unsigned __int64);",
     ):
-        name = decl.split('(')[0].split()[-1]
+        name = decl.split("(")[0].split()[-1]
         if idaapi.get_named_type(til, name, idaapi.NTF_TYPE) is not None:
             continue
         flags = ida_typeinf.PT_SILENT | ida_typeinf.PT_TYP | ida_typeinf.PT_DEMANDFIELD
         if ida_typeinf.parse_decl(til, decl, flags) <= 0:
-            idaapi.msg('%sFailed to register prototype: %s\n' % (LOG_PREFIX, decl))
+            idaapi.msg("%sFailed to register prototype: %s\n" % (LOG_PREFIX, decl))
         else:
-            idaapi.msg('%sRegistered prototype for %s\n' % (LOG_PREFIX, name))
+            idaapi.msg("%sRegistered prototype for %s\n" % (LOG_PREFIX, name))
 
 
 class CSSCInstructionVariant:
@@ -100,7 +100,10 @@ class AArch64CSSCHook(idaapi.IDP_Hooks):
             dtype = idaapi.dt_qword
 
             if _decode_log_count < 10:
-                idaapi.msg('%s%s decode at 0x%X: rd=x%d, rn=x%d, rm=x%d\n' % (LOG_PREFIX, inst.name.upper(), insn.ea, operands['rd'], operands['rn'], operands['rm']))
+                idaapi.msg(
+                    "%s%s decode at 0x%X: rd=x%d, rn=x%d, rm=x%d\n"
+                    % (LOG_PREFIX, inst.name.upper(), insn.ea, operands["rd"], operands["rn"], operands["rm"])
+                )
                 _decode_log_count += 1
 
             insn.itype = idaapi.ARM_hlt
@@ -255,8 +258,7 @@ class CSSCHexraysHook(ida_hexrays.Hexrays_Hooks):
         self.plugin = plugin
 
     def hexrays_ready(self) -> int:
-        idaapi.msg(
-            "%sHex-Rays ready, installing intrinsic lowering\n" % LOG_PREFIX)
+        idaapi.msg("%sHex-Rays ready, installing intrinsic lowering\n" % LOG_PREFIX)
         self.plugin.install_microcode_filter()
         if self.plugin.hexrays_hook is not None:
             self.plugin.hexrays_hook.unhook()
@@ -264,8 +266,7 @@ class CSSCHexraysHook(ida_hexrays.Hexrays_Hooks):
         return 0
 
     def hexrays_unloading(self) -> int:
-        idaapi.msg(
-            "%sHex-Rays unloading, removing intrinsic lowering\n" % LOG_PREFIX)
+        idaapi.msg("%sHex-Rays unloading, removing intrinsic lowering\n" % LOG_PREFIX)
         self.plugin.remove_microcode_filter()
         return 0
 
@@ -284,12 +285,12 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
         self.hexrays_hook: CSSCHexraysHook | None = None
 
     def _is_hexrays_ready(self) -> bool:
-        if hasattr(ida_hexrays, 'is_loaded'):
+        if hasattr(ida_hexrays, "is_loaded"):
             try:
                 return ida_hexrays.is_loaded()
             except Exception:
                 return False
-        if hasattr(ida_hexrays, 'hexrays_available'):
+        if hasattr(ida_hexrays, "hexrays_available"):
             try:
                 return ida_hexrays.hexrays_available()
             except Exception:
@@ -318,12 +319,10 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
         self.hook.hook()
 
         if self._is_hexrays_ready():
-            idaapi.msg('%sHex-Rays already initialized, installing intrinsic lowering now
-' % LOG_PREFIX)
+            idaapi.msg("%sHex-Rays already initialized, installing intrinsic lowering now\n" % LOG_PREFIX)
             self.install_microcode_filter()
         else:
-            idaapi.msg('%sHex-Rays not initialized yet; deferring intrinsic lowering
-' % LOG_PREFIX)
+            idaapi.msg("%sHex-Rays not initialized yet; deferring intrinsic lowering\n" % LOG_PREFIX)
             if self.hexrays_hook is None:
                 self.hexrays_hook = CSSCHexraysHook(self)
                 self.hexrays_hook.hook()
@@ -334,15 +333,12 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
         return idaapi.PLUGIN_KEEP
 
     def run(self, _arg) -> None:
-        idaapi.msg('%sRun invoked
-' % LOG_PREFIX)
+        idaapi.msg("%sRun invoked\n" % LOG_PREFIX)
         if self._is_hexrays_ready():
-            idaapi.msg('%sHex-Rays initialized via run, installing intrinsic lowering now
-' % LOG_PREFIX)
+            idaapi.msg("%sHex-Rays initialized via run, installing intrinsic lowering now\n" % LOG_PREFIX)
             self.install_microcode_filter()
         else:
-            idaapi.msg('%sHex-Rays still not initialized; deferring intrinsic lowering
-' % LOG_PREFIX)
+            idaapi.msg("%sHex-Rays still not initialized; deferring intrinsic lowering\n" % LOG_PREFIX)
             if self.hexrays_hook is None:
                 self.hexrays_hook = CSSCHexraysHook(self)
                 self.hexrays_hook.hook()
