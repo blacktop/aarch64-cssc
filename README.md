@@ -7,9 +7,9 @@ IDA (disassembler) and Hex-Rays (decompiler) plugin for FEAT_CSSC
 2. Restart IDA or reload plugins. Watch the Output window for messages prefixed with `[CSSC]`.
 
 ## Current Status
-- Disassembles FEAT_CSSC 64-bit `umax` (register) using custom mnemonic.
-- Disassembles FEAT_CSSC 64-bit `umin` (register) using custom mnemonic.
-- Emits Hex-Rays intrinsics `__cssc_umax` / `__cssc_umin` so decompiled pseudo-code retains semantics.
+- Disassembles FEAT_CSSC 32-bit and 64-bit `umax` (register) using custom mnemonic.
+- Disassembles FEAT_CSSC 32-bit and 64-bit `umin` (register) using custom mnemonic.
+- Emits Hex-Rays intrinsics `__cssc_umax` / `__cssc_umin` (64-bit) and `__cssc_umax32` / `__cssc_umin32` (32-bit) so decompiled pseudo-code retains semantics.
 - Additional FEAT_CSSC instructions can be added in `plugins/ida/aarch64_cssc.py` by extending the instruction table.
 
 ## Reference encodings
