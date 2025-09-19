@@ -9,6 +9,7 @@ import ida_ua
 import ida_kernwin
 import ida_typeinf
 import ida_xref
+import ida_idp
 
 LOG_PREFIX = "[CSSC] "
 CSSC_PREFIX = 0x43
@@ -18,9 +19,20 @@ MNEMONIC_INDENT = 16
 
 _g_plugin: "AArch64CSSCPlugin | None" = None
 
+# Custom instruction type for CSSC instructions
+# Use IDA's reserved range for custom instructions
+try:
+    from ida_idp import CUSTOM_INSN_ITYPE
+
+    ARM_CSSC = CUSTOM_INSN_ITYPE
+except ImportError:
+    # Fallback if not available in this IDA version
+    ARM_CSSC = 0x8000
+
 
 def _ensure_intrinsic_prototypes() -> None:
-    til = ida_typeinf.get_idati()  # Correct way to get type library in IDA 9.2
+    """Register CSSC intrinsic prototypes if not already present."""
+    til = ida_typeinf.get_idati()
     for decl in (
         "unsigned __int64 __cssc_umax(unsigned __int64, unsigned __int64);",
         "unsigned __int64 __cssc_umin(unsigned __int64, unsigned __int64);",
@@ -32,19 +44,19 @@ def _ensure_intrinsic_prototypes() -> None:
         if ida_typeinf.get_named_type(til, name, ida_typeinf.NTF_TYPE) is not None:
             continue
 
+        # Register the type using idc_parse_types
+        # This is the IDA 9.2 way to register function prototypes
         try:
-            # Try to import the type declaration
-            # PT_SIL means silent mode (suppress error messages)
-            result = ida_typeinf.idc_parse_types(decl, ida_typeinf.PT_SIL)
-            if result == 0:
-                # Fallback: try simpler approach
+            result = ida_typeinf.idc_parse_types(decl, 0)
+            if result != 0:
+                idaapi.msg("%sRegistered prototype for %s\n" % (LOG_PREFIX, name))
+            else:
+                # Fallback: try parse_decl approach
                 tinfo = ida_typeinf.tinfo_t()
                 if ida_typeinf.parse_decl(tinfo, til, decl, 0) is not None:
-                    idaapi.msg("%sRegistered prototype for %s\n" % (LOG_PREFIX, name))
+                    idaapi.msg("%sRegistered prototype for %s (via parse_decl)\n" % (LOG_PREFIX, name))
                 else:
                     idaapi.msg("%sFailed to register prototype: %s\n" % (LOG_PREFIX, decl))
-            else:
-                idaapi.msg("%sRegistered prototype for %s\n" % (LOG_PREFIX, name))
         except Exception as e:
             idaapi.msg("%sError registering %s: %s\n" % (LOG_PREFIX, name, str(e)))
 
@@ -113,20 +125,29 @@ _filter_log_count = 0
 
 
 def _reg_id(reg: int, is_64bit: bool = True) -> int:
-    # IDA register IDs: 129+ for X registers, 1+ for W registers
-    # Validate register number (0-31, where 31 is ZR/WZR)
+    """Map register number to IDA register ID.
+
+    For AArch64 in IDA:
+    - X0-X30 are IDs 129-159
+    - XZR is ID 160 (reg 31)
+    - W0-W30 are IDs 1-31
+    - WZR is ID 32 (reg 31)
+    """
     if reg < 0 or reg > 31:
         idaapi.msg("%sWarning: Invalid register number %d\n" % (LOG_PREFIX, reg))
-        reg = min(max(reg, 0), 31)  # Clamp to valid range
+        reg = min(max(reg, 0), 31)
 
     if is_64bit:
-        return reg + 129  # X0-X30, XZR
+        # X registers: X0=129, X1=130, ..., X30=159, XZR=160
+        return 129 + reg
     else:
-        return reg + 1  # W0-W30, WZR
+        # W registers: W0=1, W1=2, ..., W30=31, WZR=32
+        return 1 + reg
 
 
 class AArch64CSSCHook(idaapi.IDP_Hooks):
-    CUSTOM_TYPES = {idaapi.ARM_hlt}
+    # Use custom instruction type to avoid any ARM semantics
+    CUSTOM_TYPES = {ARM_CSSC}
 
     def ev_ana_insn(self, insn: ida_ua.insn_t) -> int:
         global _decode_log_count
@@ -157,10 +178,13 @@ class AArch64CSSCHook(idaapi.IDP_Hooks):
                 )
                 _decode_log_count += 1
 
-            insn.itype = idaapi.ARM_hlt
+            # Use custom instruction type
+            insn.itype = ARM_CSSC
             insn.size = 4
             insn.segpref = CSSC_PREFIX
             insn.insnpref = inst.op_id
+            # The width is already encoded in the operand dtype
+            # which will be available to the microcode filter
 
             is_64bit = dtype == idaapi.dt_qword
 
@@ -182,13 +206,18 @@ class AArch64CSSCHook(idaapi.IDP_Hooks):
         return 0
 
     def ev_emu_insn(self, insn: ida_ua.insn_t) -> bool:
-        if insn.itype != idaapi.ARM_hlt or insn.segpref != CSSC_PREFIX:
+        if insn.itype != ARM_CSSC or insn.segpref != CSSC_PREFIX:
             return False
 
-        # UMAX/UMIN instructions don't change control flow
-        # They are like regular data processing instructions
-        # Add a flow cross-reference to the next instruction
-        ida_ua.add_cref(insn.ea, insn.ea + insn.size, ida_xref.fl_F)
+        # Add normal flow to next instruction (critical for control flow)
+        # In IDA 9.2, add_cref is in ida_xref module
+        ida_xref.add_cref(insn.ea, insn.ea + insn.size, ida_xref.fl_F)
+
+        # CSSC instructions are data processing instructions that:
+        # - Read from two source operands
+        # - Write to one destination operand
+        # We don't need to explicitly track register usage here
+        # as IDA handles this based on the operand types we set in ev_ana_insn
 
         return True
 
@@ -198,6 +227,7 @@ class AArch64CSSCHook(idaapi.IDP_Hooks):
         inst = CSSC_MAP.get(ctx.insn.insnpref)
         if inst is None:
             return 0
+        # Output uppercase mnemonic with standard IDA indent (matches IDA's AArch64 convention)
         ctx.out_custom_mnem(inst.name, MNEMONIC_INDENT)
         return 1
 
@@ -302,11 +332,7 @@ class CSSCMicrocodeFilter(ida_hexrays.microcode_filter_t):
         idaapi.msg("%sMicrocode filter installed\n" % LOG_PREFIX)
 
     def match(self, cdg: ida_hexrays.cginsn_t) -> bool:
-        return (
-            cdg.insn.itype == idaapi.ARM_hlt
-            and cdg.insn.segpref == CSSC_PREFIX
-            and cdg.insn.insnpref in CSSC_INTRINSICS
-        )
+        return cdg.insn.itype == ARM_CSSC and cdg.insn.segpref == CSSC_PREFIX and cdg.insn.insnpref in CSSC_INTRINSICS
 
     def apply(self, cdg: ida_hexrays.cginsn_t) -> int:
         global _filter_log_count
@@ -320,8 +346,9 @@ class CSSCMicrocodeFilter(ida_hexrays.microcode_filter_t):
             _filter_log_count += 1
 
         dest = cdg.insn.ops[0]
-        # Check operand size to determine if it's 32-bit or 64-bit
-        is_32bit = cdg.insn.ops[0].dtype == idaapi.dt_dword
+        # Check operand dtype to determine width
+        # dt_dword = 32-bit, dt_qword = 64-bit
+        is_32bit = dest.dtype == idaapi.dt_dword
 
         if is_32bit:
             # Use 32-bit intrinsics
@@ -334,7 +361,9 @@ class CSSCMicrocodeFilter(ida_hexrays.microcode_filter_t):
             arg_type = _unsigned_type(64)
 
         builder = CallBuilder(cdg, intrinsic_name, return_type)
-        builder.set_return_register(dest.reg)
+        # Load the destination operand the same way as arguments for proper microcode register mapping
+        dst_reg = cdg.load_operand(0)
+        builder.set_return_register(dst_reg)
 
         builder.add_register_argument(arg_type, cdg.load_operand(1))
         builder.add_register_argument(arg_type, cdg.load_operand(2))
@@ -363,7 +392,14 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
             return True
 
         try:
-            if not ida_hexrays.init_hexrays_plugin():
+            # Check if Hex-Rays is available without forcing initialization
+            # This prevents the "got called without being loaded" popup
+            try:
+                # Try to access a hexrays attribute to check if it's loaded
+                _ = ida_hexrays.init_hexrays_plugin
+                if not ida_hexrays.init_hexrays_plugin():
+                    return False
+            except AttributeError:
                 return False
 
             idaapi.msg("%sHex-Rays available, installing intrinsic lowering\n" % LOG_PREFIX)
