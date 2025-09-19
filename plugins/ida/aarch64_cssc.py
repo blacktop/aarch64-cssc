@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import idaapi
 import ida_bytes
-import ida_hexrays
 import ida_ua
 import ida_kernwin
 import ida_typeinf
@@ -20,13 +19,11 @@ MNEMONIC_INDENT = 16
 _g_plugin: "AArch64CSSCPlugin | None" = None
 
 # Custom instruction type for CSSC instructions
-# Use IDA's reserved range for custom instructions
 try:
     from ida_idp import CUSTOM_INSN_ITYPE
 
     ARM_CSSC = CUSTOM_INSN_ITYPE
 except ImportError:
-    # Fallback if not available in this IDA version
     ARM_CSSC = 0x8000
 
 
@@ -41,24 +38,17 @@ def _ensure_intrinsic_prototypes() -> None:
     ):
         name = decl.split("(")[0].split()[-1]
         # Check if type already exists
-        if ida_typeinf.get_named_type(til, name, ida_typeinf.NTF_TYPE) is not None:
+        result = ida_typeinf.get_named_type(til, name, ida_typeinf.NTF_TYPE)
+        if result is not None:
             continue
 
-        # Register the type using idc_parse_types
-        # This is the IDA 9.2 way to register function prototypes
-        try:
-            result = ida_typeinf.idc_parse_types(decl, 0)
-            if result != 0:
-                idaapi.msg("%sRegistered prototype for %s\n" % (LOG_PREFIX, name))
-            else:
-                # Fallback: try parse_decl approach
-                tinfo = ida_typeinf.tinfo_t()
-                if ida_typeinf.parse_decl(tinfo, til, decl, 0) is not None:
-                    idaapi.msg("%sRegistered prototype for %s (via parse_decl)\n" % (LOG_PREFIX, name))
-                else:
-                    idaapi.msg("%sFailed to register prototype: %s\n" % (LOG_PREFIX, decl))
-        except Exception as e:
-            idaapi.msg("%sError registering %s: %s\n" % (LOG_PREFIX, name, str(e)))
+        # In IDA 9.2, just use parse_decl - it both parses and registers the type
+        tinfo = ida_typeinf.tinfo_t()
+        parsed_name = ida_typeinf.parse_decl(tinfo, til, decl, 0)
+        if parsed_name is not None:
+            idaapi.msg("%sRegistered prototype for %s\n" % (LOG_PREFIX, name))
+        else:
+            idaapi.msg("%sFailed to parse prototype: %s\n" % (LOG_PREFIX, decl))
 
 
 class CSSCInstructionVariant:
@@ -66,7 +56,7 @@ class CSSCInstructionVariant:
         self.pattern = pattern
         self.mask = mask
         self.dtype = dtype
-        self.reg_prefix = reg_prefix  # 'x' for 64-bit, 'w' for 32-bit
+        self.reg_prefix = reg_prefix
 
     def matches(self, word: int) -> bool:
         return (word & self.mask) == self.pattern
@@ -121,7 +111,6 @@ CSSC_INTRINSICS = {
 }
 
 _decode_log_count = 0
-_filter_log_count = 0
 
 
 def _reg_id(reg: int, is_64bit: bool = True) -> int:
@@ -183,8 +172,6 @@ class AArch64CSSCHook(idaapi.IDP_Hooks):
             insn.size = 4
             insn.segpref = CSSC_PREFIX
             insn.insnpref = inst.op_id
-            # The width is already encoded in the operand dtype
-            # which will be available to the microcode filter
 
             is_64bit = dtype == idaapi.dt_qword
 
@@ -210,14 +197,7 @@ class AArch64CSSCHook(idaapi.IDP_Hooks):
             return False
 
         # Add normal flow to next instruction (critical for control flow)
-        # In IDA 9.2, add_cref is in ida_xref module
         ida_xref.add_cref(insn.ea, insn.ea + insn.size, ida_xref.fl_F)
-
-        # CSSC instructions are data processing instructions that:
-        # - Read from two source operands
-        # - Write to one destination operand
-        # We don't need to explicitly track register usage here
-        # as IDA handles this based on the operand types we set in ev_ana_insn
 
         return True
 
@@ -227,151 +207,175 @@ class AArch64CSSCHook(idaapi.IDP_Hooks):
         inst = CSSC_MAP.get(ctx.insn.insnpref)
         if inst is None:
             return 0
-        # Output uppercase mnemonic with standard IDA indent (matches IDA's AArch64 convention)
+        # Output uppercase mnemonic with standard IDA indent
         ctx.out_custom_mnem(inst.name, MNEMONIC_INDENT)
         return 1
 
 
-class MicroInstruction(ida_hexrays.minsn_t):
-    def __init__(self, opcode: int, ea: int) -> None:
-        super().__init__(ea)
-        self.opcode = opcode
-        self.l.zero()
-        self.r.zero()
-        self.d.zero()
+# Global variable to store the microcode filter instance
+_microcode_filter = None
 
 
-class CallBuilder:
-    def __init__(self, cdg: ida_hexrays.cginsn_t, name: str, return_type: ida_typeinf.tinfo_t) -> None:
-        self.emitted = False
-        self.cdg = cdg
-        self.callinfo = ida_hexrays.mcallinfo_t()
-        self.callinfo.callee = idaapi.BADADDR
-        self.callinfo.solid_args = 0
-        self.callinfo.call_spd = 0
-        self.callinfo.stkargs_top = 0
-        self.callinfo.cc = idaapi.CM_CC_FASTCALL
-        self.callinfo.return_type = return_type
-        self.callinfo.flags = idaapi.FCI_SPLOK | idaapi.FCI_FINAL | idaapi.FCI_PROP
-        self.callinfo.role = idaapi.ROLE_UNK
-
-        stack_region = cdg.mba.get_stack_region()
-        glbhigh_off = stack_region.off + stack_region.size
-        self.callinfo.visible_memory.add(ida_hexrays.ivl_t(0x00, 0x100000))
-        self.callinfo.visible_memory.add(ida_hexrays.ivl_t(glbhigh_off, 0xFFFFFFFFFFFFFFFF - glbhigh_off))
-        self.callinfo.spoiled.mem.add(ida_hexrays.ivl_t(0x00, 0x100000))
-        self.callinfo.spoiled.mem.add(ida_hexrays.ivl_t(glbhigh_off, 0xFFFFFFFFFFFFFFFF - glbhigh_off))
-
-        self.callins = MicroInstruction(ida_hexrays.m_call, self.cdg.insn.ea)
-        self.callins.l.make_helper(name)
-        self.callins.d.t = ida_hexrays.mop_f
-        self.callins.d.size = 0
-        self.callins.d.f = self.callinfo
-
-        if return_type.is_void():
-            self.ins = self.callins
-        else:
-            # Get size and ensure it's valid
-            size = return_type.get_size()
-            if size <= 0 or size > 8:
-                # Default to 8 bytes for 64-bit or 4 bytes for 32-bit based on type
-                size = 8 if return_type.is_uint64() or return_type.is_int64() else 4
-
-            self.callins.d.size = size
-            self.ins = MicroInstruction(ida_hexrays.m_mov, self.cdg.insn.ea)
-            self.ins.l.t = ida_hexrays.mop_d
-            self.ins.l.d = self.callins
-            self.ins.l.size = size
-            self.ins.d.t = ida_hexrays.mop_r
-            self.ins.d.r = 0x00
-            self.ins.d.size = size
-
-    def add_register_argument(self, tinfo: ida_typeinf.tinfo_t, operand: int) -> None:
-        arg = ida_hexrays.mcallarg_t()
-        arg.t = idaapi.mop_r
-        arg.r = operand
-        arg.type = tinfo
-        # Ensure size is valid
-        size = tinfo.get_size()
-        if size <= 0 or size > 8:
-            size = 8 if tinfo.is_uint64() or tinfo.is_int64() else 4
-        arg.size = size
-        self.callinfo.args.push_back(arg)
-        self.callinfo.solid_args += 1
-
-    def set_return_register(self, reg: int) -> None:
-        self.ins.d.r = reg
-
-    def emit(self) -> None:
-        if not self.emitted:
-            self.cdg.mb.insert_into_block(self.ins, self.cdg.mb.tail)
-            self.emitted = True
-
-
-def _unsigned_type(bits: int) -> ida_typeinf.tinfo_t:
-    # Create proper unsigned integer types for IDA 9.2
+def _unsigned_type(bits: int):
+    """Create unsigned integer type for IDA 9.2."""
     t = ida_typeinf.tinfo_t()
-
     if bits == 32:
-        # Create 32-bit unsigned int using the simple type method
         t.create_simple_type(ida_typeinf.BTF_UINT32)
     elif bits == 64:
-        # Create 64-bit unsigned int using the simple type method
         t.create_simple_type(ida_typeinf.BTF_UINT64)
     else:
-        # Default to 32-bit unsigned int
         t.create_simple_type(ida_typeinf.BTF_UINT32)
-
     return t
 
 
-class CSSCMicrocodeFilter(ida_hexrays.microcode_filter_t):
-    def __init__(self) -> None:
-        super().__init__()
-        ida_hexrays.install_microcode_filter(self, True)
-        idaapi.msg("%sMicrocode filter installed\n" % LOG_PREFIX)
+def _install_hexrays_filter():
+    """Install the Hex-Rays microcode filter."""
+    global _microcode_filter
 
-    def match(self, cdg: ida_hexrays.cginsn_t) -> bool:
-        return cdg.insn.itype == ARM_CSSC and cdg.insn.segpref == CSSC_PREFIX and cdg.insn.insnpref in CSSC_INTRINSICS
+    if _microcode_filter is not None:
+        return True
 
-    def apply(self, cdg: ida_hexrays.cginsn_t) -> int:
-        global _filter_log_count
+    try:
+        # Only import ida_hexrays when we're actually installing the filter
+        import ida_hexrays
 
-        intrinsic_name = CSSC_INTRINSICS.get(cdg.insn.insnpref)
-        if intrinsic_name is None:
-            return idaapi.MERR_OK
+        # Ensure prototypes are registered
+        _ensure_intrinsic_prototypes()
 
-        if _filter_log_count < 10:
-            idaapi.msg("%sHex-Rays lowering at 0x%X -> %s\n" % (LOG_PREFIX, cdg.insn.ea, intrinsic_name))
-            _filter_log_count += 1
+        # Define helper classes inside this function to avoid module-level ida_hexrays usage
+        class MicroInstruction(ida_hexrays.minsn_t):
+            def __init__(self, opcode, ea):
+                super().__init__(ea)
+                self.opcode = opcode
+                self.l.zero()
+                self.r.zero()
+                self.d.zero()
 
-        dest = cdg.insn.ops[0]
-        # Check operand dtype to determine width
-        # dt_dword = 32-bit, dt_qword = 64-bit
-        is_32bit = dest.dtype == idaapi.dt_dword
+        class CallBuilder:
+            def __init__(self, cdg, name, return_type):
+                self.emitted = False
+                self.cdg = cdg
+                self.callinfo = ida_hexrays.mcallinfo_t()
+                self.callinfo.callee = idaapi.BADADDR
+                self.callinfo.solid_args = 0
+                self.callinfo.call_spd = 0
+                self.callinfo.stkargs_top = 0
+                self.callinfo.cc = idaapi.CM_CC_FASTCALL
+                self.callinfo.return_type = return_type
+                self.callinfo.flags = idaapi.FCI_SPLOK | idaapi.FCI_FINAL | idaapi.FCI_PROP
+                self.callinfo.role = idaapi.ROLE_UNK
 
-        if is_32bit:
-            # Use 32-bit intrinsics
-            intrinsic_name = intrinsic_name + "32"
-            return_type = _unsigned_type(32)
-            arg_type = _unsigned_type(32)
+                stack_region = cdg.mba.get_stack_region()
+                glbhigh_off = stack_region.off + stack_region.size
+                self.callinfo.visible_memory.add(ida_hexrays.ivl_t(0x00, 0x100000))
+                self.callinfo.visible_memory.add(ida_hexrays.ivl_t(glbhigh_off, 0xFFFFFFFFFFFFFFFF - glbhigh_off))
+                self.callinfo.spoiled.mem.add(ida_hexrays.ivl_t(0x00, 0x100000))
+                self.callinfo.spoiled.mem.add(ida_hexrays.ivl_t(glbhigh_off, 0xFFFFFFFFFFFFFFFF - glbhigh_off))
+
+                self.callins = MicroInstruction(ida_hexrays.m_call, self.cdg.insn.ea)
+                self.callins.l.make_helper(name)
+                self.callins.d.t = ida_hexrays.mop_f
+                self.callins.d.size = 0
+                self.callins.d.f = self.callinfo
+
+                if return_type.is_void():
+                    self.ins = self.callins
+                else:
+                    size = return_type.get_size()
+                    if size <= 0 or size > 8:
+                        size = 8 if return_type.is_uint64() or return_type.is_int64() else 4
+
+                    self.callins.d.size = size
+                    self.ins = MicroInstruction(ida_hexrays.m_mov, self.cdg.insn.ea)
+                    self.ins.l.t = ida_hexrays.mop_d
+                    self.ins.l.d = self.callins
+                    self.ins.l.size = size
+                    self.ins.d.t = ida_hexrays.mop_r
+                    self.ins.d.r = 0x00
+                    self.ins.d.size = size
+
+            def add_register_argument(self, tinfo, operand):
+                arg = ida_hexrays.mcallarg_t()
+                arg.t = idaapi.mop_r
+                arg.r = operand
+                arg.type = tinfo
+                size = tinfo.get_size()
+                if size <= 0 or size > 8:
+                    size = 8 if tinfo.is_uint64() or tinfo.is_int64() else 4
+                arg.size = size
+                self.callinfo.args.push_back(arg)
+                self.callinfo.solid_args += 1
+
+            def set_return_register(self, reg):
+                self.ins.d.r = reg
+
+            def emit(self):
+                if not self.emitted:
+                    self.cdg.mb.insert_into_block(self.ins, self.cdg.mb.tail)
+                    self.emitted = True
+
+        # Create and install the microcode filter
+        class CSSCMicrocodeFilter(ida_hexrays.microcode_filter_t):
+            def __init__(self):
+                super().__init__()
+                self.log_count = 0
+
+            def match(self, cdg):
+                return (
+                    cdg.insn.itype == ARM_CSSC
+                    and cdg.insn.segpref == CSSC_PREFIX
+                    and cdg.insn.insnpref in CSSC_INTRINSICS
+                )
+
+            def apply(self, cdg):
+                intrinsic_name = CSSC_INTRINSICS.get(cdg.insn.insnpref)
+                if intrinsic_name is None:
+                    return idaapi.MERR_OK
+
+                if self.log_count < 10:
+                    idaapi.msg("%sApplying intrinsic %s at 0x%X\n" % (LOG_PREFIX, intrinsic_name, cdg.insn.ea))
+                    self.log_count += 1
+
+                dest = cdg.insn.ops[0]
+                is_32bit = dest.dtype == idaapi.dt_dword
+
+                if is_32bit:
+                    intrinsic_name = intrinsic_name + "32"
+                    return_type = _unsigned_type(32)
+                    arg_type = _unsigned_type(32)
+                else:
+                    return_type = _unsigned_type(64)
+                    arg_type = _unsigned_type(64)
+
+                # Build the intrinsic call
+                builder = CallBuilder(cdg, intrinsic_name, return_type)
+
+                # Load the destination operand for the return value
+                dst_reg = cdg.load_operand(0)
+                builder.set_return_register(dst_reg)
+
+                # Add the two source operands as arguments
+                builder.add_register_argument(arg_type, cdg.load_operand(1))
+                builder.add_register_argument(arg_type, cdg.load_operand(2))
+
+                # Emit the call instruction
+                builder.emit()
+
+                return idaapi.MERR_OK
+
+        _microcode_filter = CSSCMicrocodeFilter()
+        if ida_hexrays.install_microcode_filter(_microcode_filter, True):
+            idaapi.msg("%sMicrocode filter installed successfully\n" % LOG_PREFIX)
+            return True
         else:
-            # Use 64-bit intrinsics
-            return_type = _unsigned_type(64)
-            arg_type = _unsigned_type(64)
+            idaapi.msg("%sFailed to install microcode filter\n" % LOG_PREFIX)
+            _microcode_filter = None
+            return False
 
-        builder = CallBuilder(cdg, intrinsic_name, return_type)
-        # Load the destination operand the same way as arguments for proper microcode register mapping
-        dst_reg = cdg.load_operand(0)
-        builder.set_return_register(dst_reg)
-
-        builder.add_register_argument(arg_type, cdg.load_operand(1))
-        builder.add_register_argument(arg_type, cdg.load_operand(2))
-        builder.emit()
-        return idaapi.MERR_OK
-
-
-# CSSCHexraysHook removed - initialization happens on first use
+    except Exception as e:
+        idaapi.msg("%sError installing filter: %s\n" % (LOG_PREFIX, str(e)))
+        _microcode_filter = None
+        return False
 
 
 class AArch64CSSCPlugin(idaapi.plugin_t):
@@ -384,31 +388,6 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
     def __init__(self) -> None:
         super().__init__()
         self.hook: AArch64CSSCHook | None = None
-        self.filter: CSSCMicrocodeFilter | None = None
-
-    def try_install_filter(self) -> bool:
-        """Try to install the microcode filter."""
-        if self.filter is not None:
-            return True
-
-        try:
-            # Check if Hex-Rays is available without forcing initialization
-            # This prevents the "got called without being loaded" popup
-            try:
-                # Try to access a hexrays attribute to check if it's loaded
-                _ = ida_hexrays.init_hexrays_plugin
-                if not ida_hexrays.init_hexrays_plugin():
-                    return False
-            except AttributeError:
-                return False
-
-            idaapi.msg("%sHex-Rays available, installing intrinsic lowering\n" % LOG_PREFIX)
-            _ensure_intrinsic_prototypes()
-            self.filter = CSSCMicrocodeFilter()
-            return True
-        except Exception as e:
-            idaapi.msg("%sError in try_install_filter: %s\n" % (LOG_PREFIX, str(e)))
-            return False
 
     def init(self) -> int:
         idaapi.msg("%s%s init requested\n" % (LOG_PREFIX, self.wanted_name))
@@ -419,38 +398,49 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
             idaapi.msg("%sSkipping: processor id %d is not ARM\n" % (LOG_PREFIX, processor_id))
             return idaapi.PLUGIN_SKIP
 
+        # Check if Hex-Rays is available
+        if not idaapi.init_hexrays_plugin():
+            idaapi.msg("%sHex-Rays not ready, deferring plugin init (will auto-retry)\n" % LOG_PREFIX)
+            return idaapi.PLUGIN_SKIP  # IDA will retry loading this plugin later
+
+        # Hex-Rays is ready! Install everything
+        idaapi.msg("%sHex-Rays detected, installing FEAT_CSSC support\n" % LOG_PREFIX)
+
         # Install hooks for disassembly
-        idaapi.msg("%sInstalling FEAT_CSSC hooks\n" % LOG_PREFIX)
         self.hook = AArch64CSSCHook()
         self.hook.hook()
+        idaapi.msg("%sDisassembly hooks installed\n" % LOG_PREFIX)
 
-        # Try to initialize Hex-Rays but don't fail if not available
-        if not self.try_install_filter():
-            idaapi.msg("%sHex-Rays not available yet, deferring intrinsic lowering\n" % LOG_PREFIX)
+        # Install Hex-Rays microcode filter
+        if _install_hexrays_filter():
+            idaapi.msg("%sDecompiler support enabled\n" % LOG_PREFIX)
+        else:
+            idaapi.msg("%sWarning: Failed to install decompiler filter\n" % LOG_PREFIX)
 
-        # Always keep the plugin loaded for disassembly
         return idaapi.PLUGIN_KEEP
 
     def run(self, _arg) -> None:
-        idaapi.msg("%sRun invoked\n" % LOG_PREFIX)
-        # Try to initialize if filter not yet installed
-        if self.filter is None:
-            if self.try_install_filter():
-                idaapi.msg("%sFilter successfully installed\n" % LOG_PREFIX)
-            else:
-                idaapi.msg("%sHex-Rays still not available\n" % LOG_PREFIX)
+        idaapi.msg("%sPlugin already active\n" % LOG_PREFIX)
+        # Everything is already installed in init()
+        # This is only called if user manually runs the plugin
+        pass
 
     def term(self) -> None:
+        global _microcode_filter
+
         if self.hook is not None:
             self.hook.unhook()
             self.hook = None
-        if self.filter is not None:
+
+        if _microcode_filter is not None:
             try:
-                ida_hexrays.remove_microcode_filter(self.filter)
-            except (AttributeError, RuntimeError) as e:
-                # Filter might already be removed or Hex-Rays not available
-                idaapi.msg("%sNote: Could not remove filter: %s\n" % (LOG_PREFIX, str(e)))
-            self.filter = None
+                import ida_hexrays
+
+                ida_hexrays.remove_microcode_filter(_microcode_filter)
+            except:
+                pass
+            _microcode_filter = None
+
         idaapi.msg("%s%s unloaded\n" % (LOG_PREFIX, self.wanted_name))
 
 

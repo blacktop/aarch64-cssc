@@ -8,10 +8,9 @@ IDA (disassembler) and Hex-Rays (decompiler) plugin for FEAT_CSSC
 
 ## Load Plug-in
 
-Edit -> Plugins -> AArch64 CSSC
-
-> [!WARNING]  
-> Plugin isn't currently auto-loading, but I'm working on it.
+> [!NOTE]  
+> Plugin should auto-load, but if it doesn't you can load it this way:  
+> Edit -> Plugins -> AArch64 CSSC  
 
 ## Current Status
 - Disassembles FEAT_CSSC 32-bit and 64-bit `umax` (register) using custom mnemonic.
