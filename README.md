@@ -6,6 +6,13 @@ IDA (disassembler) and Hex-Rays (decompiler) plugin for FEAT_CSSC
 1. Run `plugins/ida/install.sh` (set `IDA_PLUGIN_MODE=link` to symlink instead of copy).
 2. Restart IDA or reload plugins. Watch the Output window for messages prefixed with `[CSSC]`.
 
+## Load Plug-in
+
+Edit -> Plugins -> AArch64 CSSC
+
+> [!WARNING]  
+> Plugin isn't currently auto-loading, but I'm working on it.
+
 ## Current Status
 - Disassembles FEAT_CSSC 32-bit and 64-bit `umax` (register) using custom mnemonic.
 - Disassembles FEAT_CSSC 32-bit and 64-bit `umin` (register) using custom mnemonic.
