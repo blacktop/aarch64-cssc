@@ -13,7 +13,7 @@ LOG_PREFIX = "[CSSC] "
 CSSC_PREFIX = 0x43
 CSSC_OP_UMAX = 1
 CSSC_OP_UMIN = 2
-MNEMONIC_INDENT = 8
+MNEMONIC_INDENT = 16
 
 _g_plugin: "AArch64CSSCPlugin | None" = None
 
@@ -27,8 +27,8 @@ def _ensure_intrinsic_prototypes() -> None:
         name = decl.split("(")[0].split()[-1]
         if idaapi.get_named_type(til, name, idaapi.NTF_TYPE) is not None:
             continue
-        flags = ida_typeinf.PT_SILENT | ida_typeinf.PT_TYP | ida_typeinf.PT_DEMANDFIELD
-        if ida_typeinf.parse_decl(til, decl, flags) <= 0:
+        # Use idaapi.idc_parse_decl for IDA 9.x
+        if idaapi.idc_parse_decl(til, decl, idaapi.PT_SILENT) is None:
             idaapi.msg("%sFailed to register prototype: %s\n" % (LOG_PREFIX, decl))
         else:
             idaapi.msg("%sRegistered prototype for %s\n" % (LOG_PREFIX, name))
@@ -62,12 +62,12 @@ class CSSCInstruction:
 CSSC_INSTRUCTIONS = [
     CSSCInstruction(
         CSSC_OP_UMAX,
-        "umax",
+        "UMAX",
         [CSSCInstructionVariant(pattern=0x9AC06400, mask=0xFFE0FC00)],
     ),
     CSSCInstruction(
         CSSC_OP_UMIN,
-        "umin",
+        "UMIN",
         [CSSCInstructionVariant(pattern=0x9AC06C00, mask=0xFFE0FC00)],
     ),
 ]
@@ -257,17 +257,11 @@ class CSSCHexraysHook(ida_hexrays.Hexrays_Hooks):
         super().__init__()
         self.plugin = plugin
 
-    def hexrays_ready(self) -> int:
-        idaapi.msg("%sHex-Rays ready, installing intrinsic lowering\n" % LOG_PREFIX)
-        self.plugin.install_microcode_filter()
-        if self.plugin.hexrays_hook is not None:
-            self.plugin.hexrays_hook.unhook()
-            self.plugin.hexrays_hook = None
-        return 0
-
-    def hexrays_unloading(self) -> int:
-        idaapi.msg("%sHex-Rays unloading, removing intrinsic lowering\n" % LOG_PREFIX)
-        self.plugin.remove_microcode_filter()
+    def maturity(self, cfunc: ida_hexrays.cfunc_t, maturity: int) -> int:
+        # Try to install filter when Hex-Rays becomes available
+        if maturity == ida_hexrays.CMAT_BUILT and self.plugin.filter is None:
+            idaapi.msg("%sHex-Rays now active, trying to install filter\n" % LOG_PREFIX)
+            self.plugin.try_install_filter()
         return 0
 
 
@@ -284,64 +278,50 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
         self.filter: CSSCMicrocodeFilter | None = None
         self.hexrays_hook: CSSCHexraysHook | None = None
 
-    def _is_hexrays_ready(self) -> bool:
-        if hasattr(ida_hexrays, "is_loaded"):
-            try:
-                return ida_hexrays.is_loaded()
-            except Exception:
-                return False
-        if hasattr(ida_hexrays, "hexrays_available"):
-            try:
-                return ida_hexrays.hexrays_available()
-            except Exception:
-                return False
-        return False
-
-    def install_microcode_filter(self) -> None:
-        if self.filter is None:
-            _ensure_intrinsic_prototypes()
-            self.filter = CSSCMicrocodeFilter()
-
-    def remove_microcode_filter(self) -> None:
+    def try_install_filter(self) -> bool:
+        """Try to install the microcode filter."""
         if self.filter is not None:
-            ida_hexrays.remove_microcode_filter(self.filter)
-            self.filter = None
-            idaapi.msg("%sMicrocode filter removed\n" % LOG_PREFIX)
+            return True
 
-    def _install(self) -> None:
+        if not ida_hexrays.init_hexrays_plugin():
+            return False
+
+        idaapi.msg("%sHex-Rays available, installing intrinsic lowering\n" % LOG_PREFIX)
+        _ensure_intrinsic_prototypes()
+        self.filter = CSSCMicrocodeFilter()
+        return True
+
+    def init(self) -> int:
+        idaapi.msg("%s%s init requested\n" % (LOG_PREFIX, self.wanted_name))
+
+        # Check processor type
         processor_id = idaapi.ph_get_id()
         if processor_id != idaapi.PLFM_ARM:
             idaapi.msg("%sSkipping: processor id %d is not ARM\n" % (LOG_PREFIX, processor_id))
-            return
+            return idaapi.PLUGIN_SKIP
 
+        # Install hooks
         idaapi.msg("%sInstalling FEAT_CSSC hooks\n" % LOG_PREFIX)
         self.hook = AArch64CSSCHook()
         self.hook.hook()
 
-        if self._is_hexrays_ready():
-            idaapi.msg("%sHex-Rays already initialized, installing intrinsic lowering now\n" % LOG_PREFIX)
-            self.install_microcode_filter()
-        else:
-            idaapi.msg("%sHex-Rays not initialized yet; deferring intrinsic lowering\n" % LOG_PREFIX)
-            if self.hexrays_hook is None:
-                self.hexrays_hook = CSSCHexraysHook(self)
-                self.hexrays_hook.hook()
+        # Try to initialize Hex-Rays
+        if not self.try_install_filter():
+            idaapi.msg("%sHex-Rays not yet available, deferring intrinsic lowering\n" % LOG_PREFIX)
+            # Install Hex-Rays hook to detect when it becomes available
+            self.hexrays_hook = CSSCHexraysHook(self)
+            self.hexrays_hook.hook()
 
-    def init(self) -> int:
-        idaapi.msg("%s%s init requested\n" % (LOG_PREFIX, self.wanted_name))
-        ida_kernwin.execute_sync(self._install, ida_kernwin.MFF_WRITE)
         return idaapi.PLUGIN_KEEP
 
     def run(self, _arg) -> None:
         idaapi.msg("%sRun invoked\n" % LOG_PREFIX)
-        if self._is_hexrays_ready():
-            idaapi.msg("%sHex-Rays initialized via run, installing intrinsic lowering now\n" % LOG_PREFIX)
-            self.install_microcode_filter()
-        else:
-            idaapi.msg("%sHex-Rays still not initialized; deferring intrinsic lowering\n" % LOG_PREFIX)
-            if self.hexrays_hook is None:
-                self.hexrays_hook = CSSCHexraysHook(self)
-                self.hexrays_hook.hook()
+        # Try to initialize if filter not yet installed
+        if self.filter is None:
+            if self.try_install_filter():
+                idaapi.msg("%sFilter successfully installed\n" % LOG_PREFIX)
+            else:
+                idaapi.msg("%sHex-Rays still not available\n" % LOG_PREFIX)
 
     def term(self) -> None:
         if self.hook is not None:
@@ -350,7 +330,9 @@ class AArch64CSSCPlugin(idaapi.plugin_t):
         if self.hexrays_hook is not None:
             self.hexrays_hook.unhook()
             self.hexrays_hook = None
-        self.remove_microcode_filter()
+        if self.filter is not None:
+            ida_hexrays.remove_microcode_filter(self.filter)
+            self.filter = None
         idaapi.msg("%s%s unloaded\n" % (LOG_PREFIX, self.wanted_name))
 
 
