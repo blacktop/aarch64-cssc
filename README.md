@@ -1,41 +1,70 @@
 # aarch64-cssc
 
-AArch64 FEAT_CSSC support for IDA Pro (disassembler/Hex-Rays) and Ghidra.
-
-## Ghidra
-- Complete SLEIGH implementation for FEAT_CSSC `ABS`, `CNT`, `CTZ`, `SMAX/SMIN`,
-  and `UMAX/UMIN` (both register and immediate forms) under `plugins/ghidra/`
-  (`sleigh/AARCH64_CSSC.sinc`).
-- Install via `plugins/ghidra/install.sh` which copies the SLEIGH file, updates the
-  language spec, and invokes Ghidra's `support/sleigh` to rebuild the processor
-  definition automatically (pass `--skip-build` to defer the compile).
-- Reopen binaries in Ghidra to pick up the refreshed instruction semantics.
+AArch64 FEAT_CSSC instruction support for IDA Pro and Ghidra.
 
 ## Installation
-1. Run `plugins/ida/install.sh` (set `IDA_PLUGIN_MODE=link` to symlink instead of copy).
-2. Restart IDA or reload plugins. Watch the Output window for messages prefixed with `[CSSC]`.
 
-## Load Plug-in
+### IDA Pro
 
-> [!NOTE]  
-> Plugin should auto-load, but if it doesn't you can load it this way:  
-> Edit -> Plugins -> AArch64 CSSC  
+```bash
+# Install plugin
+./plugins/ida/install.sh
 
-## Current Status
+# Development mode (symlinks for live editing)
+IDA_PLUGIN_MODE=link ./plugins/ida/install.sh
 
-### IDA Pro Plugin
-- Disassembles FEAT_CSSC 32-bit and 64-bit `umax`/`umin` (register) using custom mnemonics.
-- Emits Hex-Rays intrinsics `__cssc_umax`/`__cssc_umin` (64-bit) and `__cssc_umax32`/`__cssc_umin32` (32-bit).
-- Additional FEAT_CSSC instructions can be added in `plugins/ida/aarch64_cssc.py`.
+# Custom IDA plugins directory
+./plugins/ida/install.sh /path/to/ida/plugins
+```
 
-### Ghidra Plugin
-- Complete SLEIGH implementation for all FEAT_CSSC instructions (`ABS`, `CNT`, `CTZ`, `SMAX/SMIN`, `UMAX/UMIN`).
-- Supports both register and immediate forms in 32-bit and 64-bit widths.
-- Correct bit patterns and P-Code semantics for proper disassembly and decompilation.
+Restart IDA Pro after installation.
 
-## Reference encodings
-- `arm-xml/isa_a64/ISA_A64_xml_A_profile-2025-06/umax_reg.xml`
-- `arm-xml/isa_a64/ISA_A64_xml_A_profile-2025-06/umin_reg.xml`
+### Ghidra
+
+```bash
+# Install and rebuild language pack
+GHIDRA_HOME=/path/to/ghidra ./plugins/ghidra/install.sh
+
+# Skip SLEIGH rebuild (manual rebuild required)
+GHIDRA_HOME=/path/to/ghidra ./plugins/ghidra/install.sh --skip-build
+```
+
+Re-import or reopen binaries in Ghidra after installation.
+
+## Usage
+
+### IDA Pro
+The plugin auto-loads when opening AArch64 binaries. If needed, manually load via: Edit → Plugins → AArch64 CSSC
+
+### Ghidra
+Instructions are automatically recognized after installation. No manual activation required.
+
+## Supported Instructions
+
+### IDA Pro
+- UMAX/UMIN (register, 32/64-bit)
+- Hex-Rays decompiler intrinsics: `__cssc_umax`, `__cssc_umin`
+
+### Ghidra
+- ABS (register, 32/64-bit)
+- CNT (register, 32/64-bit)
+- CTZ (register, 32/64-bit)
+- SMAX/SMIN (register, 32/64-bit)
+- UMAX/UMIN (register, 32/64-bit)
+- Decompiler intrinsics: `__cssc_abs`, `__cssc_cnt`, `__cssc_ctz`
+- Min/max operations use conditional patterns recognized by the decompiler
+
+## Adding Instructions
+
+### IDA Pro
+Edit `plugins/ida/aarch64_cssc.py` and add entries to `CSSC_INSTRUCTIONS` list.
+
+### Ghidra
+Edit `plugins/ghidra/sleigh/AARCH64_CSSC.sinc` following existing patterns.
+
+## Reference
+
+ARM instruction encodings: `arm-xml/isa_a64/ISA_A64_xml_A_profile-2025-06/`
 
 ## Credit
 
