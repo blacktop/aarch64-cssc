@@ -29,6 +29,20 @@ GHIDRA_HOME=/path/to/ghidra ./plugins/ghidra/install.sh
 GHIDRA_HOME=/path/to/ghidra ./plugins/ghidra/install.sh --skip-build
 ```
 
+#### Use my macOS app *(shameless self-plug)*
+
+Install nice stand-alone macOS app packaged version of Ghidra
+
+```bash
+brew install --cask blacktop/tap/ghidra-app 
+```
+
+Install the lanuage extension
+
+```bash
+./plugins/ghidra/install.sh /Applications/Ghidra.app/Contents/Resources/ghidra
+```
+
 Re-import or reopen binaries in Ghidra after installation.
 
 ## Usage
