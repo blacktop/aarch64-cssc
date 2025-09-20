@@ -1,0 +1,153 @@
+# AArch64 FEAT_CSSC (Common Short Sequence Compression) Instructions
+# Uses standard AArch64 mnemonic conventions (no _w/_x suffixes)
+
+# Define pcodeop intrinsics for operations that don't map directly
+define pcodeop __cssc_abs;
+define pcodeop __cssc_cnt;
+define pcodeop __cssc_ctz;
+
+# ABS (register)
+:abs Rd_GPR32, Rn_GPR32
+ is sf=0 & b_3030=1 & S=0 & b_2428=0x1a & b_2123=6 & dp1.opcode2=0x0 & b_1015=0x8 & Rn_GPR32 & Rd_GPR32 & Rd_GPR64
+{
+    local src:4 = Rn_GPR32;
+    local result:4 = __cssc_abs(src);
+    Rd_GPR64 = zext(result);
+}
+
+:abs Rd_GPR64, Rn_GPR64
+ is sf=1 & b_3030=1 & S=0 & b_2428=0x1a & b_2123=6 & dp1.opcode2=0x0 & b_1015=0x8 & Rn_GPR64 & Rd_GPR64
+{
+    Rd_GPR64 = __cssc_abs(Rn_GPR64);
+}
+
+# CNT (register)
+:cnt Rd_GPR32, Rn_GPR32
+ is sf=0 & b_3030=1 & S=0 & b_2428=0x1a & b_2123=6 & dp1.opcode2=0x0 & b_1015=0x7 & Rn_GPR32 & Rd_GPR32 & Rd_GPR64
+{
+    local src:4 = Rn_GPR32;
+    local count:4 = __cssc_cnt(src);
+    Rd_GPR64 = zext(count);
+}
+
+:cnt Rd_GPR64, Rn_GPR64
+ is sf=1 & b_3030=1 & S=0 & b_2428=0x1a & b_2123=6 & dp1.opcode2=0x0 & b_1015=0x7 & Rn_GPR64 & Rd_GPR64
+{
+    Rd_GPR64 = __cssc_cnt(Rn_GPR64);
+}
+
+# CTZ (register)
+:ctz Rd_GPR32, Rn_GPR32
+ is sf=0 & b_3030=1 & S=0 & b_2428=0x1a & b_2123=6 & dp1.opcode2=0x0 & b_1015=0x6 & Rn_GPR32 & Rd_GPR32 & Rd_GPR64
+{
+    local src:4 = Rn_GPR32;
+    local count:4 = __cssc_ctz(src);
+    Rd_GPR64 = zext(count);
+}
+
+:ctz Rd_GPR64, Rn_GPR64
+ is sf=1 & b_3030=1 & S=0 & b_2428=0x1a & b_2123=6 & dp1.opcode2=0x0 & b_1015=0x6 & Rn_GPR64 & Rd_GPR64
+{
+    Rd_GPR64 = __cssc_ctz(Rn_GPR64);
+}
+
+# SMAX (register) - Signed maximum using CSEL-like pattern
+:smax Rd_GPR32, Rn_GPR32, Rm_GPR32
+ is sf=0 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x18 & Rm_GPR32 & Rn_GPR32 & Rd_GPR32 & Rd_GPR64
+{
+    local lhs:4 = Rn_GPR32;
+    local rhs:4 = Rm_GPR32;
+    local res:4 = lhs;
+    local cond:1 = (lhs s< rhs);
+    if (!cond) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = zext(res);
+}
+
+:smax Rd_GPR64, Rn_GPR64, Rm_GPR64
+ is sf=1 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x18 & Rm_GPR64 & Rn_GPR64 & Rd_GPR64
+{
+    local lhs:8 = Rn_GPR64;
+    local rhs:8 = Rm_GPR64;
+    local res:8 = lhs;
+    if (lhs s>= rhs) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = res;
+}
+
+# SMIN (register) - Signed minimum
+:smin Rd_GPR32, Rn_GPR32, Rm_GPR32
+ is sf=0 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x1a & Rm_GPR32 & Rn_GPR32 & Rd_GPR32 & Rd_GPR64
+{
+    local lhs:4 = Rn_GPR32;
+    local rhs:4 = Rm_GPR32;
+    local res:4 = lhs;
+    if (lhs s<= rhs) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = zext(res);
+}
+
+:smin Rd_GPR64, Rn_GPR64, Rm_GPR64
+ is sf=1 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x1a & Rm_GPR64 & Rn_GPR64 & Rd_GPR64
+{
+    local lhs:8 = Rn_GPR64;
+    local rhs:8 = Rm_GPR64;
+    local res:8 = lhs;
+    if (lhs s<= rhs) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = res;
+}
+
+# UMAX (register) - Unsigned maximum
+:umax Rd_GPR32, Rn_GPR32, Rm_GPR32
+ is sf=0 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x19 & Rm_GPR32 & Rn_GPR32 & Rd_GPR32 & Rd_GPR64
+{
+    local lhs:4 = Rn_GPR32;
+    local rhs:4 = Rm_GPR32;
+    local res:4 = lhs;
+    if (lhs >= rhs) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = zext(res);
+}
+
+:umax Rd_GPR64, Rn_GPR64, Rm_GPR64
+ is sf=1 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x19 & Rm_GPR64 & Rn_GPR64 & Rd_GPR64
+{
+    local lhs:8 = Rn_GPR64;
+    local rhs:8 = Rm_GPR64;
+    local res:8 = lhs;
+    if (lhs >= rhs) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = res;
+}
+
+# UMIN (register) - Unsigned minimum
+:umin Rd_GPR32, Rn_GPR32, Rm_GPR32
+ is sf=0 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x1b & Rm_GPR32 & Rn_GPR32 & Rd_GPR32 & Rd_GPR64
+{
+    local lhs:4 = Rn_GPR32;
+    local rhs:4 = Rm_GPR32;
+    local res:4 = lhs;
+    if (lhs <= rhs) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = zext(res);
+}
+
+:umin Rd_GPR64, Rn_GPR64, Rm_GPR64
+ is sf=1 & op.dp3_op54=0 & b_2428=0x1a & op.dp3_op31=6 & b_1015=0x1b & Rm_GPR64 & Rn_GPR64 & Rd_GPR64
+{
+    local lhs:8 = Rn_GPR64;
+    local rhs:8 = Rm_GPR64;
+    local res:8 = lhs;
+    if (lhs <= rhs) goto <skip>;
+    res = rhs;
+<skip>
+    Rd_GPR64 = res;
+}

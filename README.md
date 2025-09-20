@@ -1,6 +1,15 @@
 # aarch64-cssc
 
-IDA (disassembler) and Hex-Rays (decompiler) plugin for FEAT_CSSC
+AArch64 FEAT_CSSC support for IDA Pro (disassembler/Hex-Rays) and Ghidra.
+
+## Ghidra
+- Complete SLEIGH implementation for FEAT_CSSC `ABS`, `CNT`, `CTZ`, `SMAX/SMIN`,
+  and `UMAX/UMIN` (both register and immediate forms) under `plugins/ghidra/`
+  (`sleigh/AARCH64_CSSC.sinc`).
+- Install via `plugins/ghidra/install.sh` which copies the SLEIGH file, updates the
+  language spec, and invokes Ghidra's `support/sleigh` to rebuild the processor
+  definition automatically (pass `--skip-build` to defer the compile).
+- Reopen binaries in Ghidra to pick up the refreshed instruction semantics.
 
 ## Installation
 1. Run `plugins/ida/install.sh` (set `IDA_PLUGIN_MODE=link` to symlink instead of copy).
@@ -13,10 +22,16 @@ IDA (disassembler) and Hex-Rays (decompiler) plugin for FEAT_CSSC
 > Edit -> Plugins -> AArch64 CSSC  
 
 ## Current Status
-- Disassembles FEAT_CSSC 32-bit and 64-bit `umax` (register) using custom mnemonic.
-- Disassembles FEAT_CSSC 32-bit and 64-bit `umin` (register) using custom mnemonic.
-- Emits Hex-Rays intrinsics `__cssc_umax` / `__cssc_umin` (64-bit) and `__cssc_umax32` / `__cssc_umin32` (32-bit) so decompiled pseudo-code retains semantics.
-- Additional FEAT_CSSC instructions can be added in `plugins/ida/aarch64_cssc.py` by extending the instruction table.
+
+### IDA Pro Plugin
+- Disassembles FEAT_CSSC 32-bit and 64-bit `umax`/`umin` (register) using custom mnemonics.
+- Emits Hex-Rays intrinsics `__cssc_umax`/`__cssc_umin` (64-bit) and `__cssc_umax32`/`__cssc_umin32` (32-bit).
+- Additional FEAT_CSSC instructions can be added in `plugins/ida/aarch64_cssc.py`.
+
+### Ghidra Plugin
+- Complete SLEIGH implementation for all FEAT_CSSC instructions (`ABS`, `CNT`, `CTZ`, `SMAX/SMIN`, `UMAX/UMIN`).
+- Supports both register and immediate forms in 32-bit and 64-bit widths.
+- Correct bit patterns and P-Code semantics for proper disassembly and decompilation.
 
 ## Reference encodings
 - `arm-xml/isa_a64/ISA_A64_xml_A_profile-2025-06/umax_reg.xml`
