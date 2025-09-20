@@ -1,32 +1,49 @@
 # Ghidra FEAT_CSSC Support
 
-Support files for teaching Ghidra about the AArch64 FEAT_CSSC
-extension. Coverage includes the register and immediate forms of the
-following instructions in both 32-bit and 64-bit widths:
+AArch64 FEAT_CSSC instruction support for Ghidra.
 
-- `ABS` – Absolute value
-- `CNT` – Population count (bit count)
-- `CTZ` – Count trailing zeros
-- `SMAX` / `SMIN` – Signed maximum/minimum
-- `UMAX` / `UMIN` – Unsigned maximum/minimum
+## Installation
 
-## Contents
-- `sleigh/AARCH64_CSSC.sinc` – SLEIGH constructors for all FEAT_CSSC instructions with correct bit patterns and P-Code semantics.
+```bash
+# Install with automatic SLEIGH rebuild
+GHIDRA_HOME=/path/to/ghidra ./install.sh
 
-## Usage
-1. Locate your Ghidra installation (e.g. `/Applications/ghidra_11.1.1`).
-2. Copy `sleigh/AARCH64_CSSC.sinc` into `Ghidra/Processors/AARCH64/data/languages/`
-   (the helper script `plugins/ghidra/install.sh` automates this step and runs
-   `support/sleigh -a data/languages/AARCH64_AppleSilicon.slaspec` for you).
-3. Launch Ghidra, re-import an AArch64 binary, and verify that the CSSC
-   encodings disassemble with the expected p-code.
+# Install without rebuilding (manual rebuild required)
+GHIDRA_HOME=/path/to/ghidra ./install.sh --skip-build
+```
 
-> Tip: Use Ghidra's "Show Pcode" window on a CSSC instruction to confirm the
-> generated p-code performs an unsigned comparison and selects the appropriate
-> operand.
+## Supported Instructions
 
-## Next Steps
-- Test the implementation with actual FEAT_CSSC instruction encodings.
-- Consider creating a dedicated processor variant for cleaner integration.
-- Package as a Ghidra extension for easier distribution.
-- Add unit tests for instruction semantics validation.
+All instructions support both 32-bit (W registers) and 64-bit (X registers) variants:
+
+- `abs` - Absolute value
+- `cnt` - Population count
+- `ctz` - Count trailing zeros
+- `smax` - Signed maximum
+- `smin` - Signed minimum
+- `umax` - Unsigned maximum
+- `umin` - Unsigned minimum
+
+## Implementation Details
+
+### Files
+- `sleigh/AARCH64_CSSC.sinc` - SLEIGH instruction definitions
+- `install.sh` - Installation script
+
+### Decompiler Output
+- ABS/CNT/CTZ use pcodeop intrinsics (`__cssc_abs`, `__cssc_cnt`, `__cssc_ctz`)
+- MIN/MAX use conditional patterns that the decompiler recognizes
+
+## Verification
+
+After installation, re-import your binary and check:
+1. Instructions disassemble correctly (e.g., `umax x8,x3,x1`)
+2. Decompiler shows appropriate operations or intrinsic calls
+3. Use "Show Pcode" window to verify instruction semantics
+
+## Adding Instructions
+
+Edit `sleigh/AARCH64_CSSC.sinc` following the existing patterns. Each instruction needs:
+- Correct bit pattern matching
+- Proper operand decoding
+- P-code semantics or pcodeop declaration
